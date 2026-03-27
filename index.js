@@ -4,6 +4,33 @@ const axios = require("axios");
 
 const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
 
+// ===== MESSAGE TRACKING FOR /clear =====
+let sentMessages = {}; // { chatId: [messageId, ...] }
+
+// Helper to send message and track its message_id
+async function sendAndTrack(chatId, text, options) {
+  try {
+    const sent = await bot.sendMessage(chatId, text, options);
+    if (!sentMessages[chatId]) sentMessages[chatId] = [];
+    sentMessages[chatId].push(sent.message_id);
+    return sent;
+  } catch (err) {
+    console.error("sendAndTrack error:", err.message);
+  }
+}
+
+// Helper to send photo and track its message_id
+async function sendPhotoAndTrack(chatId, photo, options) {
+  try {
+    const sent = await bot.sendPhoto(chatId, photo, options);
+    if (!sentMessages[chatId]) sentMessages[chatId] = [];
+    sentMessages[chatId].push(sent.message_id);
+    return sent;
+  } catch (err) {
+    console.error("sendPhotoAndTrack error:", err.message);
+  }
+}
+
 // ===== QUEUE SYSTEM =====
 let otpQueue = [];
 let currentProcess = null;
@@ -76,11 +103,37 @@ bot.onText(/\/start/, (msg) => {
     ensureBalance(userId);
   }
 
-  bot.sendMessage(
+  sendAndTrack(
     msg.chat.id,
     `✨ <b>OTP SERVICE PANEL</b>\n\nWelcome! Choose an option below:`,
     { parse_mode: "HTML", ...mainMenuKeyboard }
   );
+});
+
+// ===== CLEAR CHAT COMMAND =====
+bot.onText(/\/clear/, async (msg) => {
+  const chatId = msg.chat.id;
+
+  if (!sentMessages[chatId] || sentMessages[chatId].length === 0) {
+    return sendAndTrack(chatId, "🧹 Nothing to clear.");
+  }
+
+  // Delete all tracked bot messages
+  for (const messageId of sentMessages[chatId]) {
+    try {
+      await bot.deleteMessage(chatId, messageId);
+    } catch {
+      // ignore errors such as message too old or already deleted
+    }
+  }
+  sentMessages[chatId] = [];
+
+  // Optionally delete the /clear command message itself
+  try {
+    await bot.deleteMessage(chatId, msg.message_id);
+  } catch {}
+
+  sendAndTrack(chatId, "🧹 Chat cleared (bot messages only).");
 });
 
 // ===== HANDLE KEYBOARD =====
@@ -120,7 +173,7 @@ async function processQueue() {
     ensureBalance(userId);
     balances[userId] -= price;
 
-    bot.sendMessage(
+    sendAndTrack(
       chatId,
       `✅ <b>OTP REQUEST STARTED</b>
 
@@ -139,7 +192,7 @@ async function processQueue() {
 
       if (attempts > 24) {
         clearInterval(checkSMS);
-        bot.sendMessage(chatId, "❌ OTP Timeout. Try again.");
+        sendAndTrack(chatId, "❌ OTP Timeout. Try again.");
         currentProcess = null;
         processQueue();
         return;
@@ -152,7 +205,7 @@ async function processQueue() {
         );
 
         if (check.data.sms && check.data.sms.length > 0) {
-          bot.sendMessage(
+          sendAndTrack(
             chatId,
             `🔐 <b>OTP RECEIVED</b>
 
@@ -171,7 +224,7 @@ async function processQueue() {
 
   } catch (err) {
     console.error("OTP request error:", err.response?.data || err.message);
-    bot.sendMessage(chatId, "❌ OTP request failed.");
+    sendAndTrack(chatId, "❌ OTP request failed.");
     currentProcess = null;
     processQueue();
   }
@@ -200,7 +253,7 @@ bot.on("callback_query", async (query) => {
       ].filter(Boolean));
     }
 
-    return bot.sendMessage(
+    return sendAndTrack(
       msg.chat.id,
       `🛒 <b>Select Service</b>\n\nChoose the platform you want OTP from:`,
       {
@@ -216,7 +269,7 @@ bot.on("callback_query", async (query) => {
     const price = services[service];
 
     if (balances[userId] < price)
-      return bot.sendMessage(msg.chat.id, "❌ Not enough balance.");
+      return sendAndTrack(msg.chat.id, "❌ Not enough balance.");
 
     otpQueue.push({
       userId,
@@ -227,7 +280,7 @@ bot.on("callback_query", async (query) => {
 
     const position = otpQueue.length;
 
-    bot.sendMessage(
+    sendAndTrack(
       msg.chat.id,
       `⏳ <b>Added to Queue</b>
 
@@ -244,14 +297,14 @@ Please wait for your turn...`,
   // ===== BALANCE =====
   if (data === "balance") {
     const userBalance = balances[userId] ?? 0;
-    bot.sendMessage(msg.chat.id, `💰 <b>Your Balance:</b> ₱${userBalance}`, { parse_mode: "HTML" });
+    sendAndTrack(msg.chat.id, `💰 <b>Your Balance:</b> ₱${userBalance}`, { parse_mode: "HTML" });
   }
 
   // ===== TOPUP =====
   if (data === "topup") {
     pendingTopUps[userId] = { chatId: msg.chat.id, approved: false, screenshot: null };
 
-    bot.sendMessage(
+    sendAndTrack(
       msg.chat.id,
       `💳 <b>Top-Up Details</b>
 
@@ -263,7 +316,7 @@ Maya: <code>09625699439</code>
     );
 
     // Notify admin dynamically
-    bot.sendMessage(
+    sendAndTrack(
       process.env.ADMIN_ID,
       `📥 <b>Top-Up Request Pending</b>\nUser: ${userId}`,
       { parse_mode: "HTML" }
@@ -275,17 +328,17 @@ Maya: <code>09625699439</code>
     let text = `📊 <b>Service Rates</b>\n\n`;
     const keys = Object.keys(services).sort();
     for (let s of keys) text += `• ${s} — ₱${services[s]}\n`;
-    bot.sendMessage(msg.chat.id, text, { parse_mode: "HTML" });
+    sendAndTrack(msg.chat.id, text, { parse_mode: "HTML" });
   }
 
   // ===== AVAILABILITY =====
   if (data === "availability") {
-    bot.sendMessage(msg.chat.id, renderAvailabilityTable(), { parse_mode: "HTML" });
+    sendAndTrack(msg.chat.id, renderAvailabilityTable(), { parse_mode: "HTML" });
   }
 
   // ===== HELP =====
   if (data === "help")
-    bot.sendMessage(msg.chat.id, `❓ <b>Help</b>\n\nContact admin: @kiaramauir`, { parse_mode: "HTML" });
+    sendAndTrack(msg.chat.id, `❓ <b>Help</b>\n\nContact admin: @kiaramauir`, { parse_mode: "HTML" });
 
   bot.answerCallbackQuery(query.id);
 });
@@ -298,9 +351,9 @@ bot.on("photo", (msg) => {
   const photo = msg.photo[msg.photo.length - 1].file_id;
   pendingTopUps[userId].screenshot = photo;
 
-  bot.sendMessage(msg.chat.id, "⏳ Waiting for admin approval...");
+  sendAndTrack(msg.chat.id, "⏳ Waiting for admin approval...");
 
-  bot.sendPhoto(process.env.ADMIN_ID, photo, {
+  sendPhotoAndTrack(process.env.ADMIN_ID, photo, {
     caption: `📥 Top-Up Request\nUser: ${userId}`,
     reply_markup: {
       inline_keyboard: [
@@ -337,11 +390,11 @@ bot.on("callback_query", (query) => {
       balances[userId] += amount;
       pendingTopUps[userId].approved = true;
 
-      bot.sendMessage(userId, `✅ Your top-up of ₱${amount} has been approved!`);
+      sendAndTrack(userId, `✅ Your top-up of ₱${amount} has been approved!`);
       delete pendingTopUps[userId];
     });
   } else if (data.startsWith("reject_")) {
-    bot.sendMessage(userId, "❌ Your top-up request has been rejected.");
+    sendAndTrack(userId, "❌ Your top-up request has been rejected.");
     delete pendingTopUps[userId];
   }
 
