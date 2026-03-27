@@ -8,8 +8,8 @@ const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
 let otpQueue = [];
 let currentProcess = null;
 
-// ===== TOP-UP REQUESTS =====
-let topupRequests = {};
+// ===== TOP-UP PENDING =====
+let pendingTopUps = {}; // { userId: { chatId, screenshot, approved: false } }
 
 // ===== TELEGRAM MENU BUTTON =====
 bot.setMyCommands([
@@ -177,7 +177,9 @@ bot.on("callback_query", async (query) => {
     for (let i = 0; i < keys.length; i += 2) {
       buttons.push([
         { text: `📦 ${keys[i]}`, callback_data: `buy_${keys[i]}` },
-        keys[i + 1] ? { text: `📦 ${keys[i + 1]}`, callback_data: `buy_${keys[i + 1]}` } : null
+        keys[i + 1]
+          ? { text: `📦 ${keys[i + 1]}`, callback_data: `buy_${keys[i + 1]}` }
+          : null
       ].filter(Boolean));
     }
 
@@ -228,6 +230,8 @@ Please wait for your turn...`,
 
   // ===== TOPUP =====
   if (data === "topup") {
+    pendingTopUps[userId] = { chatId: msg.chat.id, approved: false, screenshot: null };
+
     bot.sendMessage(
       msg.chat.id,
       `💳 <b>Top-Up Details</b>
@@ -235,7 +239,14 @@ Please wait for your turn...`,
 GCash: <code>09625699439</code>
 Maya: <code>09625699439</code>
 
-📸 Send screenshot after payment.`,
+📸 Send screenshot after payment (optional).`,
+      { parse_mode: "HTML" }
+    );
+
+    // Notify admin dynamically
+    bot.sendMessage(
+      process.env.ADMIN_ID,
+      `📥 <b>Top-Up Request Pending</b>\nUser: ${userId}`,
       { parse_mode: "HTML" }
     );
   }
@@ -257,72 +268,62 @@ Maya: <code>09625699439</code>
   if (data === "help")
     bot.sendMessage(msg.chat.id, `❓ <b>Help</b>\n\nContact admin: @kiaramauir`, { parse_mode: "HTML" });
 
-  // ===== ADMIN APPROVE TOPUP =====
-  if (data.startsWith("approve_")) {
-    const adminId = userId;
-    if (adminId !== process.env.ADMIN_ID) return;
-
-    const parts = data.split("_");
-    const targetUser = parts[1];
-    const amount = parseInt(parts[2]);
-
-    if (!balances[targetUser]) balances[targetUser] = 0;
-    balances[targetUser] += amount;
-
-    bot.sendMessage(
-      topupRequests[targetUser].chatId,
-      `✅ <b>Top-Up Approved</b>
-
-💰 Amount: ₱${amount}
-💳 New Balance: ₱${balances[targetUser]}`,
-      { parse_mode: "HTML" }
-    );
-
-    delete topupRequests[targetUser];
-
-    bot.sendMessage(msg.chat.id, "✅ Balance added.");
-  }
-
-  // ===== ADMIN REJECT =====
-  if (data.startsWith("reject_")) {
-    const adminId = userId;
-    if (adminId !== process.env.ADMIN_ID) return;
-
-    const targetUser = data.split("_")[1];
-
-    bot.sendMessage(
-      topupRequests[targetUser].chatId,
-      "❌ Top-up rejected.",
-      { parse_mode: "HTML" }
-    );
-
-    delete topupRequests[targetUser];
-
-    bot.sendMessage(msg.chat.id, "❌ Rejected.");
-  }
-
   bot.answerCallbackQuery(query.id);
 });
 
-// ===== PHOTO HANDLER (TOPUP PROOF) =====
+// ===== PHOTO HANDLER =====
 bot.on("photo", (msg) => {
   const userId = msg.from.id.toString();
+  if (!pendingTopUps[userId]) return;
+
   const photo = msg.photo[msg.photo.length - 1].file_id;
+  pendingTopUps[userId].screenshot = photo;
 
   bot.sendMessage(msg.chat.id, "⏳ Waiting for admin approval...");
 
-  // store request
-  topupRequests[userId] = { chatId: msg.chat.id };
-
   bot.sendPhoto(process.env.ADMIN_ID, photo, {
-    caption: `📥 Top-Up Request\nUser ID: ${userId}\n\nReply with amount using buttons below`,
+    caption: `📥 Top-Up Request\nUser: ${userId}`,
     reply_markup: {
       inline_keyboard: [
         [
-          { text: "✅ Approve 70", callback_data: `approve_${userId}_70` },
+          { text: "✅ Approve", callback_data: `approve_${userId}` },
           { text: "❌ Reject", callback_data: `reject_${userId}` }
         ]
       ]
     }
   });
+});
+
+// ===== ADMIN APPROVE/REJECT =====
+bot.on("callback_query", (query) => {
+  const msg = query.message;
+  const data = query.data;
+
+  if (!data.startsWith("approve_") && !data.startsWith("reject_")) return;
+
+  const userId = data.split("_")[1];
+  if (msg.from.id.toString() !== process.env.ADMIN_ID) return;
+
+  if (!pendingTopUps[userId]) return;
+
+  if (data.startsWith("approve_")) {
+    bot.sendMessage(process.env.ADMIN_ID, `💰 Send amount to add for user ${userId}:`, { reply_markup: { force_reply: true } });
+
+    bot.once("message", (replyMsg) => {
+      const amount = parseFloat(replyMsg.text);
+      if (isNaN(amount) || amount <= 0) {
+        return bot.sendMessage(process.env.ADMIN_ID, "❌ Invalid amount.");
+      }
+      balances[userId] = (balances[userId] || 0) + amount;
+      pendingTopUps[userId].approved = true;
+
+      bot.sendMessage(userId, `✅ Your top-up of ₱${amount} has been approved!`);
+      delete pendingTopUps[userId];
+    });
+  } else if (data.startsWith("reject_")) {
+    bot.sendMessage(userId, "❌ Your top-up request has been rejected.");
+    delete pendingTopUps[userId];
+  }
+
+  bot.answerCallbackQuery(query.id);
 });
