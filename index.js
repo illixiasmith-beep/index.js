@@ -1,9 +1,10 @@
 require("dotenv").config();
 const TelegramBot = require("node-telegram-bot-api");
+const axios = require("axios");
 
 const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
 
-// ====== DATA ======
+// ===== DATA =====
 const services = {
   Foodpanda: 7,
   Grab: 5,
@@ -35,11 +36,10 @@ const services = {
   Playtime: 5
 };
 
-// ====== USER BALANCE STORAGE ======
 let balances = {};
-let pendingTopup = {};
+let pendingTopups = {}; // store proof
 
-// ====== MENU ======
+// ===== MENU =====
 const mainMenu = {
   reply_markup: {
     inline_keyboard: [
@@ -55,38 +55,37 @@ const mainMenu = {
   }
 };
 
-// ====== START ======
+// ===== START =====
 bot.onText(/\/start/, (msg) => {
   const userId = msg.from.id;
 
-  // Give admin ₱100
   if (userId.toString() === process.env.ADMIN_ID) {
     balances[userId] = 100;
   }
 
   if (!balances[userId]) balances[userId] = 0;
 
-  bot.sendMessage(msg.chat.id, "Welcome! Choose an option:", mainMenu);
+  bot.sendMessage(msg.chat.id, "Welcome!", mainMenu);
 });
 
-// ====== BUTTON HANDLER ======
+// ===== BUTTON HANDLER =====
 bot.on("callback_query", async (query) => {
   const msg = query.message;
   const userId = query.from.id;
   const data = query.data;
 
-  // ===== BUY OTP MENU =====
+  // ===== BUY MENU =====
   if (data === "buy") {
-    const serviceButtons = Object.keys(services).map((s) => [
+    const buttons = Object.keys(services).map((s) => [
       { text: `${s} (₱${services[s]})`, callback_data: `buy_${s}` }
     ]);
 
     bot.sendMessage(msg.chat.id, "Select Service:", {
-      reply_markup: { inline_keyboard: serviceButtons }
+      reply_markup: { inline_keyboard: buttons }
     });
   }
 
-  // ===== BUY SERVICE =====
+  // ===== BUY OTP (API CALL) =====
   if (data.startsWith("buy_")) {
     const service = data.replace("buy_", "");
     const price = services[service];
@@ -95,12 +94,29 @@ bot.on("callback_query", async (query) => {
       return bot.sendMessage(msg.chat.id, "❌ Not enough balance.");
     }
 
-    balances[userId] -= price;
+    try {
+      const res = await axios.post(
+        `${process.env.OTP_API_URL}/request`,
+        {
+          service: service
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${process.env.OTP_API_KEY}`
+          }
+        }
+      );
 
-    bot.sendMessage(
-      msg.chat.id,
-      `✅ OTP for ${service} requested!\n💸 Deducted: ₱${price}\n💰 Remaining: ₱${balances[userId]}`
-    );
+      balances[userId] -= price;
+
+      bot.sendMessage(
+        msg.chat.id,
+        `✅ OTP Requested for ${service}\n📱 Number: ${res.data.number}\n💰 Balance: ₱${balances[userId]}`
+      );
+
+    } catch (err) {
+      bot.sendMessage(msg.chat.id, "❌ OTP request failed.");
+    }
   }
 
   // ===== BALANCE =====
@@ -108,10 +124,8 @@ bot.on("callback_query", async (query) => {
     bot.sendMessage(msg.chat.id, `💰 Balance: ₱${balances[userId]}`);
   }
 
-  // ===== TOP UP =====
+  // ===== TOP-UP =====
   if (data === "topup") {
-    pendingTopup[userId] = true;
-
     bot.sendMessage(
       msg.chat.id,
       `💳 Top-Up:\n\nGCash: 09625699439 (Non-Verified)\nMaya: 09625699439\n\nSend screenshot after payment.`
@@ -121,11 +135,7 @@ bot.on("callback_query", async (query) => {
   // ===== RATES =====
   if (data === "rates") {
     let text = "📊 Rates:\n\n";
-
-    for (let s in services) {
-      text += `${s} - ₱${services[s]}\n`;
-    }
-
+    for (let s in services) text += `${s} - ₱${services[s]}\n`;
     text += "\n🎰 Other casinos: ₱3-₱5";
 
     bot.sendMessage(msg.chat.id, text);
@@ -134,10 +144,7 @@ bot.on("callback_query", async (query) => {
   // ===== AVAILABILITY =====
   if (data === "availability") {
     let text = "📡 Availability:\n\n";
-
-    for (let s in services) {
-      text += `${s} - 200\n`;
-    }
+    for (let s in services) text += `${s} - 200\n`;
 
     bot.sendMessage(msg.chat.id, text);
   }
@@ -146,36 +153,53 @@ bot.on("callback_query", async (query) => {
   if (data === "help") {
     bot.sendMessage(
       msg.chat.id,
-      `Hello! Thanks for "Clicking Me" 😊\n\nContact admin: @kiaramauir\n\nAfter top-up, send screenshot to get balance.`
+      `Hello! Thanks for "Clicking Me"\nContact admin: @kiaramauir`
     );
+  }
+
+  // ===== ADMIN APPROVE =====
+  if (data.startsWith("approve_")) {
+    if (userId.toString() !== process.env.ADMIN_ID) return;
+
+    const target = data.split("_")[1];
+    const amount = 50;
+
+    balances[target] = (balances[target] || 0) + amount;
+
+    bot.sendMessage(target, `✅ Top-Up Approved!\n💰 +₱${amount}`);
+    bot.answerCallbackQuery(query.id, { text: "Approved" });
+  }
+
+  // ===== ADMIN REJECT =====
+  if (data.startsWith("reject_")) {
+    if (userId.toString() !== process.env.ADMIN_ID) return;
+
+    const target = data.split("_")[1];
+
+    bot.sendMessage(target, "❌ Top-Up Rejected.");
+    bot.answerCallbackQuery(query.id, { text: "Rejected" });
   }
 
   bot.answerCallbackQuery(query.id);
 });
 
-// ===== HANDLE SCREENSHOT =====
+// ===== RECEIVE SCREENSHOT =====
 bot.on("photo", (msg) => {
   const userId = msg.from.id;
-
-  if (!pendingTopup[userId]) {
-    return bot.sendMessage(msg.chat.id, "⚠️ Please click Top-Up first.");
-  }
-
   const photo = msg.photo[msg.photo.length - 1].file_id;
 
-  // Auto add balance (example ₱50)
-  const amount = 50;
+  bot.sendMessage(msg.chat.id, "⏳ Waiting for admin approval...");
 
-  balances[userId] += amount;
-  pendingTopup[userId] = false;
-
-  bot.sendMessage(
-    msg.chat.id,
-    `✅ Payment received!\n💰 Added ₱${amount}\nNew Balance: ₱${balances[userId]}`
-  );
-
-  // Send to admin
+  // Send to admin with buttons
   bot.sendPhoto(process.env.ADMIN_ID, photo, {
-    caption: `📥 New Top-Up\nUser: ${userId}\nAmount Added: ₱${amount}`
+    caption: `📥 Top-Up Request\nUser: ${userId}`,
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: "✅ Approve", callback_data: `approve_${userId}` },
+          { text: "❌ Reject", callback_data: `reject_${userId}` }
+        ]
+      ]
+    }
   });
 });
