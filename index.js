@@ -59,14 +59,21 @@ const renderAvailabilityTable = () => {
   return text;
 };
 
+// ===== UTILITY: Ensure user balance is initialized =====
+function ensureBalance(userId) {
+  if (balances[userId] === undefined) {
+    balances[userId] = 0;
+  }
+}
+
 // ===== START =====
 bot.onText(/\/start/, (msg) => {
   const userId = msg.from.id.toString();
 
   if (userId === process.env.ADMIN_ID) {
     balances[userId] = 999999;
-  } else if (!balances[userId]) {
-    balances[userId] = 0;
+  } else {
+    ensureBalance(userId);
   }
 
   bot.sendMessage(
@@ -81,6 +88,10 @@ bot.on("message", (msg) => {
   if (!msg.text) return;
 
   const text = msg.text;
+  const userId = msg.from.id.toString();
+
+  // Always ensure balance exists on any user message
+  ensureBalance(userId);
 
   if (text === "🛒 Buy OTP") return bot.emit("callback_query", { data: "buy", message: msg, from: msg.from, id: "manual" });
   if (text === "💰 Balance") return bot.emit("callback_query", { data: "balance", message: msg, from: msg.from, id: "manual" });
@@ -105,6 +116,8 @@ async function processQueue() {
       { headers: { Authorization: `Bearer ${process.env.OTP_API_KEY}` } }
     );
 
+    // Deduct price, ensure balance initialized just in case
+    ensureBalance(userId);
     balances[userId] -= price;
 
     bot.sendMessage(
@@ -157,6 +170,7 @@ async function processQueue() {
     }, 5000);
 
   } catch (err) {
+    console.error("OTP request error:", err.response?.data || err.message);
     bot.sendMessage(chatId, "❌ OTP request failed.");
     currentProcess = null;
     processQueue();
@@ -168,6 +182,9 @@ bot.on("callback_query", async (query) => {
   const msg = query.message;
   const userId = query.from.id.toString();
   const data = query.data;
+
+  // Always ensure balance on callback queries too
+  ensureBalance(userId);
 
   // ===== BUY MENU =====
   if (data === "buy") {
@@ -225,8 +242,10 @@ Please wait for your turn...`,
   }
 
   // ===== BALANCE =====
-  if (data === "balance")
-    bot.sendMessage(msg.chat.id, `💰 <b>Your Balance:</b> ₱${balances[userId]}`, { parse_mode: "HTML" });
+  if (data === "balance") {
+    const userBalance = balances[userId] ?? 0;
+    bot.sendMessage(msg.chat.id, `💰 <b>Your Balance:</b> ₱${userBalance}`, { parse_mode: "HTML" });
+  }
 
   // ===== TOPUP =====
   if (data === "topup") {
@@ -314,7 +333,8 @@ bot.on("callback_query", (query) => {
       if (isNaN(amount) || amount <= 0) {
         return bot.sendMessage(process.env.ADMIN_ID, "❌ Invalid amount.");
       }
-      balances[userId] = (balances[userId] || 0) + amount;
+      ensureBalance(userId);
+      balances[userId] += amount;
       pendingTopUps[userId].approved = true;
 
       bot.sendMessage(userId, `✅ Your top-up of ₱${amount} has been approved!`);
