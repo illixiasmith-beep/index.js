@@ -8,6 +8,9 @@ const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
 let otpQueue = [];
 let currentProcess = null;
 
+// ===== TOP-UP REQUESTS =====
+let topupRequests = {};
+
 // ===== TELEGRAM MENU BUTTON =====
 bot.setMyCommands([
   { command: "start", description: "Open Menu" },
@@ -174,9 +177,7 @@ bot.on("callback_query", async (query) => {
     for (let i = 0; i < keys.length; i += 2) {
       buttons.push([
         { text: `📦 ${keys[i]}`, callback_data: `buy_${keys[i]}` },
-        keys[i + 1]
-          ? { text: `📦 ${keys[i + 1]}`, callback_data: `buy_${keys[i + 1]}` }
-          : null
+        keys[i + 1] ? { text: `📦 ${keys[i + 1]}`, callback_data: `buy_${keys[i + 1]}` } : null
       ].filter(Boolean));
     }
 
@@ -221,10 +222,11 @@ Please wait for your turn...`,
     processQueue();
   }
 
-  // ===== OTHER FEATURES =====
+  // ===== BALANCE =====
   if (data === "balance")
     bot.sendMessage(msg.chat.id, `💰 <b>Your Balance:</b> ₱${balances[userId]}`, { parse_mode: "HTML" });
 
+  // ===== TOPUP =====
   if (data === "topup") {
     bot.sendMessage(
       msg.chat.id,
@@ -238,6 +240,7 @@ Maya: <code>09625699439</code>
     );
   }
 
+  // ===== RATES =====
   if (data === "rates") {
     let text = `📊 <b>Service Rates</b>\n\n`;
     const keys = Object.keys(services).sort();
@@ -245,14 +248,81 @@ Maya: <code>09625699439</code>
     bot.sendMessage(msg.chat.id, text, { parse_mode: "HTML" });
   }
 
+  // ===== AVAILABILITY =====
   if (data === "availability") {
-    bot.sendMessage(msg.chat.id, renderAvailabilityTable(), {
-      parse_mode: "HTML"
-    });
+    bot.sendMessage(msg.chat.id, renderAvailabilityTable(), { parse_mode: "HTML" });
   }
 
+  // ===== HELP =====
   if (data === "help")
     bot.sendMessage(msg.chat.id, `❓ <b>Help</b>\n\nContact admin: @kiaramauir`, { parse_mode: "HTML" });
 
+  // ===== ADMIN APPROVE TOPUP =====
+  if (data.startsWith("approve_")) {
+    const adminId = userId;
+    if (adminId !== process.env.ADMIN_ID) return;
+
+    const parts = data.split("_");
+    const targetUser = parts[1];
+    const amount = parseInt(parts[2]);
+
+    if (!balances[targetUser]) balances[targetUser] = 0;
+    balances[targetUser] += amount;
+
+    bot.sendMessage(
+      topupRequests[targetUser].chatId,
+      `✅ <b>Top-Up Approved</b>
+
+💰 Amount: ₱${amount}
+💳 New Balance: ₱${balances[targetUser]}`,
+      { parse_mode: "HTML" }
+    );
+
+    delete topupRequests[targetUser];
+
+    bot.sendMessage(msg.chat.id, "✅ Balance added.");
+  }
+
+  // ===== ADMIN REJECT =====
+  if (data.startsWith("reject_")) {
+    const adminId = userId;
+    if (adminId !== process.env.ADMIN_ID) return;
+
+    const targetUser = data.split("_")[1];
+
+    bot.sendMessage(
+      topupRequests[targetUser].chatId,
+      "❌ Top-up rejected.",
+      { parse_mode: "HTML" }
+    );
+
+    delete topupRequests[targetUser];
+
+    bot.sendMessage(msg.chat.id, "❌ Rejected.");
+  }
+
   bot.answerCallbackQuery(query.id);
+});
+
+// ===== PHOTO HANDLER (TOPUP PROOF) =====
+bot.on("photo", (msg) => {
+  const userId = msg.from.id.toString();
+  const photo = msg.photo[msg.photo.length - 1].file_id;
+
+  bot.sendMessage(msg.chat.id, "⏳ Waiting for admin approval...");
+
+  // store request
+  topupRequests[userId] = { chatId: msg.chat.id };
+
+  bot.sendPhoto(process.env.ADMIN_ID, photo, {
+    caption: `📥 Top-Up Request\nUser ID: ${userId}\n\nReply with amount using buttons below`,
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: "✅ Approve 70", callback_data: `approve_${userId}_70` },
+          { text: "❌ Reject", callback_data: `reject_${userId}` }
+        ]
+      ]
+    }
+  });
 });
