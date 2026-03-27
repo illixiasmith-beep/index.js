@@ -4,6 +4,10 @@ const axios = require("axios");
 
 const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
 
+// ===== QUEUE SYSTEM =====
+let otpQueue = [];
+let currentProcess = null;
+
 // ===== TELEGRAM MENU BUTTON =====
 bot.setMyCommands([
   { command: "start", description: "Open Menu" },
@@ -42,14 +46,12 @@ const mainMenuKeyboard = {
 // ===== AVAILABILITY TABLE =====
 const renderAvailabilityTable = () => {
   let text = `📡 <b>Service Availability</b>\n\n<pre>`;
-
   for (const s in availability) {
     const qty = availability[s];
     const status = qty > 0 ? "🟢" : "🔴";
     const name = s.padEnd(12, " ");
     text += `${status} ${name} ${qty}\n`;
   }
-
   text += `</pre>`;
   return text;
 };
@@ -58,7 +60,6 @@ const renderAvailabilityTable = () => {
 bot.onText(/\/start/, (msg) => {
   const userId = msg.from.id.toString();
 
-  // ✅ ADMIN ALWAYS HAS BALANCE
   if (userId === process.env.ADMIN_ID) {
     balances[userId] = 999999;
   } else if (!balances[userId]) {
@@ -86,16 +87,89 @@ bot.on("message", (msg) => {
   if (text === "❓ Help") return bot.emit("callback_query", { data: "help", message: msg, from: msg.from, id: "manual" });
 });
 
+// ===== QUEUE PROCESS FUNCTION =====
+async function processQueue() {
+  if (currentProcess || otpQueue.length === 0) return;
+
+  const next = otpQueue.shift();
+  currentProcess = next;
+
+  const { userId, chatId, service, price } = next;
+
+  try {
+    const res = await axios.get(
+      `${process.env.OTP_API_URL}/buy/activation/philippines/any/${service}`,
+      { headers: { Authorization: `Bearer ${process.env.OTP_API_KEY}` } }
+    );
+
+    balances[userId] -= price;
+
+    bot.sendMessage(
+      chatId,
+      `✅ <b>OTP REQUEST STARTED</b>
+
+📦 <b>Service:</b> ${service}
+📱 <b>Number:</b>
+<code>${res.data.phone}</code>
+
+💰 <b>Balance:</b> ₱${balances[userId]}`,
+      { parse_mode: "HTML" }
+    );
+
+    let attempts = 0;
+
+    const checkSMS = setInterval(async () => {
+      attempts++;
+
+      if (attempts > 24) {
+        clearInterval(checkSMS);
+        bot.sendMessage(chatId, "❌ OTP Timeout. Try again.");
+        currentProcess = null;
+        processQueue();
+        return;
+      }
+
+      try {
+        const check = await axios.get(
+          `${process.env.OTP_API_URL}/check/${res.data.id}`,
+          { headers: { Authorization: `Bearer ${process.env.OTP_API_KEY}` } }
+        );
+
+        if (check.data.sms && check.data.sms.length > 0) {
+          bot.sendMessage(
+            chatId,
+            `🔐 <b>OTP RECEIVED</b>
+
+<code>${check.data.sms[0].code}</code>`,
+            { parse_mode: "HTML" }
+          );
+
+          clearInterval(checkSMS);
+          currentProcess = null;
+          processQueue();
+        }
+      } catch (err) {
+        console.log("CHECK ERROR:", err.message);
+      }
+    }, 5000);
+
+  } catch (err) {
+    bot.sendMessage(chatId, "❌ OTP request failed.");
+    currentProcess = null;
+    processQueue();
+  }
+}
+
 // ===== CALLBACK HANDLER =====
 bot.on("callback_query", async (query) => {
   const msg = query.message;
   const userId = query.from.id.toString();
   const data = query.data;
 
-  // ===== BUY MENU (CLEAN UI) =====
+  // ===== BUY MENU =====
   if (data === "buy") {
     const buttons = [];
-    const keys = Object.keys(services).sort(); // ✅ sorted
+    const keys = Object.keys(services).sort();
 
     for (let i = 0; i < keys.length; i += 2) {
       buttons.push([
@@ -116,7 +190,7 @@ bot.on("callback_query", async (query) => {
     );
   }
 
-  // ===== BUY OTP =====
+  // ===== BUY OTP (QUEUE VERSION) =====
   if (data.startsWith("buy_")) {
     const service = data.replace("buy_", "");
     const price = services[service];
@@ -124,53 +198,33 @@ bot.on("callback_query", async (query) => {
     if (balances[userId] < price)
       return bot.sendMessage(msg.chat.id, "❌ Not enough balance.");
 
-    try {
-      const res = await axios.get(
-        `${process.env.OTP_API_URL}/buy/activation/philippines/any/${service}`,
-        { headers: { Authorization: `Bearer ${process.env.OTP_API_KEY}` } }
-      );
+    otpQueue.push({
+      userId,
+      chatId: msg.chat.id,
+      service,
+      price
+    });
 
-      balances[userId] -= price;
+    const position = otpQueue.length;
 
-      bot.sendMessage(
-        msg.chat.id,
-        `✅ <b>OTP REQUESTED</b>
+    bot.sendMessage(
+      msg.chat.id,
+      `⏳ <b>Added to Queue</b>
 
-📦 <b>Service:</b> ${service}
-📱 <b>Number:</b>
-<code>${res.data.phone}</code>
+📦 Service: ${service}
+📍 Position: ${position}
 
-💰 <b>Balance:</b> ₱${balances[userId]}`,
-        { parse_mode: "HTML" }
-      );
+Please wait for your turn...`,
+      { parse_mode: "HTML" }
+    );
 
-      const checkSMS = setInterval(async () => {
-        const check = await axios.get(`${process.env.OTP_API_URL}/check/${res.data.id}`, {
-          headers: { Authorization: `Bearer ${process.env.OTP_API_KEY}` }
-        });
-
-        if (check.data.sms && check.data.sms.length > 0) {
-          bot.sendMessage(
-            msg.chat.id,
-            `🔐 <b>OTP RECEIVED</b>
-
-<code>${check.data.sms[0].code}</code>`,
-            { parse_mode: "HTML" }
-          );
-          clearInterval(checkSMS);
-        }
-      }, 5000);
-
-    } catch (err) {
-      bot.sendMessage(msg.chat.id, "❌ OTP request failed.");
-    }
+    processQueue();
   }
 
-  // ===== BALANCE =====
+  // ===== OTHER FEATURES =====
   if (data === "balance")
     bot.sendMessage(msg.chat.id, `💰 <b>Your Balance:</b> ₱${balances[userId]}`, { parse_mode: "HTML" });
 
-  // ===== TOPUP =====
   if (data === "topup") {
     bot.sendMessage(
       msg.chat.id,
@@ -184,58 +238,21 @@ Maya: <code>09625699439</code>
     );
   }
 
-  // ===== RATES =====
   if (data === "rates") {
     let text = `📊 <b>Service Rates</b>\n\n`;
-
     const keys = Object.keys(services).sort();
     for (let s of keys) text += `• ${s} — ₱${services[s]}\n`;
-
     bot.sendMessage(msg.chat.id, text, { parse_mode: "HTML" });
   }
 
-  // ===== AVAILABILITY =====
   if (data === "availability") {
     bot.sendMessage(msg.chat.id, renderAvailabilityTable(), {
       parse_mode: "HTML"
     });
   }
 
-  // ===== HELP =====
   if (data === "help")
     bot.sendMessage(msg.chat.id, `❓ <b>Help</b>\n\nContact admin: @kiaramauir`, { parse_mode: "HTML" });
 
   bot.answerCallbackQuery(query.id);
-});
-
-// ===== PHOTO (TOPUP PROOF) =====
-bot.on("photo", (msg) => {
-  const userId = msg.from.id.toString();
-  const photo = msg.photo[msg.photo.length - 1].file_id;
-
-  bot.sendMessage(msg.chat.id, "⏳ Waiting for admin approval...");
-
-  bot.sendPhoto(process.env.ADMIN_ID, photo, {
-    caption: `📥 Top-Up Request\nUser: ${userId}`,
-    reply_markup: {
-      inline_keyboard: [
-        [
-          { text: "✅ Approve", callback_data: `approve_${userId}` },
-          { text: "❌ Reject", callback_data: `reject_${userId}` }
-        ]
-      ]
-    }
-  });
-});
-
-// ===== ADMIN UPDATE =====
-bot.onText(/\/update_avail (.+) (\d+)/, (msg, match) => {
-  const userId = msg.from.id.toString();
-  if (userId !== process.env.ADMIN_ID) return;
-
-  const service = match[1];
-  const qty = parseInt(match[2]);
-  availability[service] = qty;
-
-  bot.sendMessage(msg.chat.id, `✅ Updated ${service} → ${qty}`);
 });
