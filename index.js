@@ -4,7 +4,7 @@ const axios = require("axios");
 
 const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
 
-// ===== TELEGRAM MENU BUTTON (near input field) =====
+// ===== TELEGRAM MENU BUTTON =====
 bot.setMyCommands([
   { command: "start", description: "Open Menu" },
   { command: "buy", description: "Buy OTP" },
@@ -27,7 +27,7 @@ let balances = {};
 let availability = {};
 Object.keys(services).forEach((s) => (availability[s] = 200));
 
-// ===== CLEAN KEYBOARD MENU =====
+// ===== MAIN MENU =====
 const mainMenuKeyboard = {
   reply_markup: {
     keyboard: [
@@ -39,7 +39,7 @@ const mainMenuKeyboard = {
   }
 };
 
-// ===== CLEAN AVAILABILITY TABLE =====
+// ===== AVAILABILITY TABLE =====
 const renderAvailabilityTable = () => {
   let text = `📡 <b>Service Availability</b>\n\n<pre>`;
 
@@ -58,8 +58,12 @@ const renderAvailabilityTable = () => {
 bot.onText(/\/start/, (msg) => {
   const userId = msg.from.id.toString();
 
-  if (userId === process.env.ADMIN_ID) balances[userId] = 100;
-  if (!balances[userId]) balances[userId] = 0;
+  // ✅ ADMIN ALWAYS HAS BALANCE
+  if (userId === process.env.ADMIN_ID) {
+    balances[userId] = 999999;
+  } else if (!balances[userId]) {
+    balances[userId] = 0;
+  }
 
   bot.sendMessage(
     msg.chat.id,
@@ -68,7 +72,7 @@ bot.onText(/\/start/, (msg) => {
   );
 });
 
-// ===== HANDLE KEYBOARD TEXT =====
+// ===== HANDLE KEYBOARD =====
 bot.on("message", (msg) => {
   if (!msg.text) return;
 
@@ -88,24 +92,28 @@ bot.on("callback_query", async (query) => {
   const userId = query.from.id.toString();
   const data = query.data;
 
-  // ===== BUY MENU (2 COLUMN CLEAN) =====
+  // ===== BUY MENU (CLEAN UI) =====
   if (data === "buy") {
     const buttons = [];
-    const keys = Object.keys(services);
+    const keys = Object.keys(services).sort(); // ✅ sorted
 
     for (let i = 0; i < keys.length; i += 2) {
       buttons.push([
-        { text: `${keys[i]} (₱${services[keys[i]]})`, callback_data: `buy_${keys[i]}` },
+        { text: `📦 ${keys[i]}`, callback_data: `buy_${keys[i]}` },
         keys[i + 1]
-          ? { text: `${keys[i + 1]} (₱${services[keys[i + 1]]})`, callback_data: `buy_${keys[i + 1]}` }
+          ? { text: `📦 ${keys[i + 1]}`, callback_data: `buy_${keys[i + 1]}` }
           : null
       ].filter(Boolean));
     }
 
-    return bot.sendMessage(msg.chat.id, "🛒 <b>Select Service</b>", {
-      parse_mode: "HTML",
-      reply_markup: { inline_keyboard: buttons }
-    });
+    return bot.sendMessage(
+      msg.chat.id,
+      `🛒 <b>Select Service</b>\n\nChoose the platform you want OTP from:`,
+      {
+        parse_mode: "HTML",
+        reply_markup: { inline_keyboard: buttons }
+      }
+    );
   }
 
   // ===== BUY OTP =====
@@ -126,7 +134,13 @@ bot.on("callback_query", async (query) => {
 
       bot.sendMessage(
         msg.chat.id,
-        `✅ <b>OTP Requested</b>\n\n📦 Service: ${service}\n📱 Number: <code>${res.data.phone}</code>\n💰 Balance: ₱${balances[userId]}`,
+        `✅ <b>OTP REQUESTED</b>
+
+📦 <b>Service:</b> ${service}
+📱 <b>Number:</b>
+<code>${res.data.phone}</code>
+
+💰 <b>Balance:</b> ₱${balances[userId]}`,
         { parse_mode: "HTML" }
       );
 
@@ -138,7 +152,9 @@ bot.on("callback_query", async (query) => {
         if (check.data.sms && check.data.sms.length > 0) {
           bot.sendMessage(
             msg.chat.id,
-            `✅ <b>OTP Code:</b> <code>${check.data.sms[0].code}</code>`,
+            `🔐 <b>OTP RECEIVED</b>
+
+<code>${check.data.sms[0].code}</code>`,
             { parse_mode: "HTML" }
           );
           clearInterval(checkSMS);
@@ -158,7 +174,12 @@ bot.on("callback_query", async (query) => {
   if (data === "topup") {
     bot.sendMessage(
       msg.chat.id,
-      `💳 <b>Top-Up Details</b>\n\nGCash: <code>09625699439</code>\nMaya: <code>09625699439</code>\n\n📸 Send screenshot after payment.`,
+      `💳 <b>Top-Up Details</b>
+
+GCash: <code>09625699439</code>
+Maya: <code>09625699439</code>
+
+📸 Send screenshot after payment.`,
       { parse_mode: "HTML" }
     );
   }
@@ -167,7 +188,8 @@ bot.on("callback_query", async (query) => {
   if (data === "rates") {
     let text = `📊 <b>Service Rates</b>\n\n`;
 
-    for (let s in services) text += `• ${s} — ₱${services[s]}\n`;
+    const keys = Object.keys(services).sort();
+    for (let s of keys) text += `• ${s} — ₱${services[s]}\n`;
 
     bot.sendMessage(msg.chat.id, text, { parse_mode: "HTML" });
   }
