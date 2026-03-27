@@ -4,79 +4,82 @@ const axios = require("axios");
 
 const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
 
+// ===== TELEGRAM MENU BUTTON (near input field) =====
+bot.setMyCommands([
+  { command: "start", description: "Open Menu" },
+  { command: "buy", description: "Buy OTP" },
+  { command: "balance", description: "Check Balance" },
+  { command: "rates", description: "View Rates" },
+  { command: "availability", description: "Check Availability" }
+]);
+
 // ===== DATA =====
 const services = {
-  Foodpanda: 7,
-  Grab: 5,
-  Facebook: 5,
-  Telegram: 18,
-  Whatsapp: 3,
-  Arionplay: 3,
-  Ninogaming: 3,
-  Casinoplus: 8,
-  Bingoplus: 8,
-  Jagat: 7,
-  Moveit: 6,
-  Joyride: 5,
-  Shopee: 7,
-  Lazada: 8,
-  Shein: 5,
-  Gcash: 10,
-  Maya: 8,
-  Grinder: 4,
-  Viber: 7,
-  Netflix: 5,
-  Okbet: 3,
-  "8aceotp": 3,
-  Sg8Casino: 7,
-  Mosloan: 5,
-  Tala: 5,
-  fb5emotion: 6,
-  ArenaPlus: 5,
-  Playtime: 5
+  Foodpanda: 7, Grab: 5, Facebook: 5, Telegram: 18, Whatsapp: 3,
+  Arionplay: 3, Ninogaming: 3, Casinoplus: 8, Bingoplus: 8,
+  Jagat: 7, Moveit: 6, Joyride: 5, Shopee: 7, Lazada: 8,
+  Shein: 5, Gcash: 10, Maya: 8, Grinder: 4, Viber: 7,
+  Netflix: 5, Okbet: 3, "8aceotp": 3, Sg8Casino: 7,
+  Mosloan: 5, Tala: 5, fb5emotion: 6, ArenaPlus: 5, Playtime: 5
 };
 
-// Initialize balances and availability
 let balances = {};
 let availability = {};
 Object.keys(services).forEach((s) => (availability[s] = 200));
 
-// ===== MENU =====
-const mainMenu = {
+// ===== CLEAN KEYBOARD MENU =====
+const mainMenuKeyboard = {
   reply_markup: {
-    inline_keyboard: [
-      [{ text: "🛒 Buy OTP", callback_data: "buy" }],
-      [{ text: "💰 Check Balance", callback_data: "balance" }],
-      [{ text: "➕ Top-Up", callback_data: "topup" }],
-      [
-        { text: "📊 Rates", callback_data: "rates" },
-        { text: "📡 Check Availability", callback_data: "availability" }
-      ],
-      [{ text: "❓ Help", callback_data: "help" }]
-    ]
+    keyboard: [
+      ["🛒 Buy OTP", "💰 Balance"],
+      ["📊 Rates", "📡 Availability"],
+      ["➕ Top Up", "❓ Help"]
+    ],
+    resize_keyboard: true
   }
 };
 
-// ===== HELPERS =====
+// ===== CLEAN AVAILABILITY TABLE =====
 const renderAvailabilityTable = () => {
-  let table = '📡 *Current Availability:*\n\n';
-  table += 'Service       | Qty\n';
-  table += '-----------------\n';
+  let text = `📡 <b>Service Availability</b>\n\n<pre>`;
+
   for (const s in availability) {
-    table += `${s.padEnd(12)} | ${availability[s]}\n`;
+    const qty = availability[s];
+    const status = qty > 0 ? "🟢" : "🔴";
+    const name = s.padEnd(12, " ");
+    text += `${status} ${name} ${qty}\n`;
   }
-  return table;
+
+  text += `</pre>`;
+  return text;
 };
 
 // ===== START =====
 bot.onText(/\/start/, (msg) => {
   const userId = msg.from.id.toString();
 
-  if (userId === process.env.ADMIN_ID) balances[userId] = 100; // test balance
+  if (userId === process.env.ADMIN_ID) balances[userId] = 100;
   if (!balances[userId]) balances[userId] = 0;
 
-  // Only send the menu button, no spam text
-  bot.sendMessage(msg.chat.id, "📌 Click the button below to open the menu:", mainMenu);
+  bot.sendMessage(
+    msg.chat.id,
+    `✨ <b>OTP SERVICE PANEL</b>\n\nWelcome! Choose an option below:`,
+    { parse_mode: "HTML", ...mainMenuKeyboard }
+  );
+});
+
+// ===== HANDLE KEYBOARD TEXT =====
+bot.on("message", (msg) => {
+  if (!msg.text) return;
+
+  const text = msg.text;
+
+  if (text === "🛒 Buy OTP") return bot.emit("callback_query", { data: "buy", message: msg, from: msg.from, id: "manual" });
+  if (text === "💰 Balance") return bot.emit("callback_query", { data: "balance", message: msg, from: msg.from, id: "manual" });
+  if (text === "📊 Rates") return bot.emit("callback_query", { data: "rates", message: msg, from: msg.from, id: "manual" });
+  if (text === "📡 Availability") return bot.emit("callback_query", { data: "availability", message: msg, from: msg.from, id: "manual" });
+  if (text === "➕ Top Up") return bot.emit("callback_query", { data: "topup", message: msg, from: msg.from, id: "manual" });
+  if (text === "❓ Help") return bot.emit("callback_query", { data: "help", message: msg, from: msg.from, id: "manual" });
 });
 
 // ===== CALLBACK HANDLER =====
@@ -85,12 +88,24 @@ bot.on("callback_query", async (query) => {
   const userId = query.from.id.toString();
   const data = query.data;
 
-  // ===== BUY MENU =====
+  // ===== BUY MENU (2 COLUMN CLEAN) =====
   if (data === "buy") {
-    const buttons = Object.keys(services).map((s) => [
-      { text: `${s} (₱${services[s]})`, callback_data: `buy_${s}` }
-    ]);
-    bot.sendMessage(msg.chat.id, "Select Service:", { reply_markup: { inline_keyboard: buttons } });
+    const buttons = [];
+    const keys = Object.keys(services);
+
+    for (let i = 0; i < keys.length; i += 2) {
+      buttons.push([
+        { text: `${keys[i]} (₱${services[keys[i]]})`, callback_data: `buy_${keys[i]}` },
+        keys[i + 1]
+          ? { text: `${keys[i + 1]} (₱${services[keys[i + 1]]})`, callback_data: `buy_${keys[i + 1]}` }
+          : null
+      ].filter(Boolean));
+    }
+
+    return bot.sendMessage(msg.chat.id, "🛒 <b>Select Service</b>", {
+      parse_mode: "HTML",
+      reply_markup: { inline_keyboard: buttons }
+    });
   }
 
   // ===== BUY OTP =====
@@ -98,10 +113,10 @@ bot.on("callback_query", async (query) => {
     const service = data.replace("buy_", "");
     const price = services[service];
 
-    if (balances[userId] < price) return bot.sendMessage(msg.chat.id, "❌ Not enough balance.");
+    if (balances[userId] < price)
+      return bot.sendMessage(msg.chat.id, "❌ Not enough balance.");
 
     try {
-      // Example: 5SIM integration
       const res = await axios.get(
         `${process.env.OTP_API_URL}/buy/activation/philippines/any/${service}`,
         { headers: { Authorization: `Bearer ${process.env.OTP_API_KEY}` } }
@@ -111,16 +126,21 @@ bot.on("callback_query", async (query) => {
 
       bot.sendMessage(
         msg.chat.id,
-        `✅ OTP Requested for ${service}\n📱 Number: ${res.data.phone}\n💰 Balance: ₱${balances[userId]}`
+        `✅ <b>OTP Requested</b>\n\n📦 Service: ${service}\n📱 Number: <code>${res.data.phone}</code>\n💰 Balance: ₱${balances[userId]}`,
+        { parse_mode: "HTML" }
       );
 
-      // Poll for SMS
       const checkSMS = setInterval(async () => {
         const check = await axios.get(`${process.env.OTP_API_URL}/check/${res.data.id}`, {
           headers: { Authorization: `Bearer ${process.env.OTP_API_KEY}` }
         });
+
         if (check.data.sms && check.data.sms.length > 0) {
-          bot.sendMessage(msg.chat.id, `✅ OTP Code: ${check.data.sms[0].code}`);
+          bot.sendMessage(
+            msg.chat.id,
+            `✅ <b>OTP Code:</b> <code>${check.data.sms[0].code}</code>`,
+            { parse_mode: "HTML" }
+          );
           clearInterval(checkSMS);
         }
       }, 5000);
@@ -131,52 +151,42 @@ bot.on("callback_query", async (query) => {
   }
 
   // ===== BALANCE =====
-  if (data === "balance") bot.sendMessage(msg.chat.id, `💰 Balance: ₱${balances[userId]}`);
+  if (data === "balance")
+    bot.sendMessage(msg.chat.id, `💰 <b>Your Balance:</b> ₱${balances[userId]}`, { parse_mode: "HTML" });
 
-  // ===== TOP-UP =====
+  // ===== TOPUP =====
   if (data === "topup") {
     bot.sendMessage(
       msg.chat.id,
-      `💳 Top-Up:\n\nGCash: 09625699439 (Non-Verified)\nMaya: 09625699439\n\nSend screenshot after payment.`
+      `💳 <b>Top-Up Details</b>\n\nGCash: <code>09625699439</code>\nMaya: <code>09625699439</code>\n\n📸 Send screenshot after payment.`,
+      { parse_mode: "HTML" }
     );
   }
 
   // ===== RATES =====
   if (data === "rates") {
-    let text = "📊 Rates:\n\n";
-    for (let s in services) text += `${s} - ₱${services[s]}\n`;
-    text += "\n🎰 Other casinos: ₱3-₱5";
-    bot.sendMessage(msg.chat.id, text);
+    let text = `📊 <b>Service Rates</b>\n\n`;
+
+    for (let s in services) text += `• ${s} — ₱${services[s]}\n`;
+
+    bot.sendMessage(msg.chat.id, text, { parse_mode: "HTML" });
   }
 
   // ===== AVAILABILITY =====
   if (data === "availability") {
-    bot.sendMessage(msg.chat.id, renderAvailabilityTable(), { parse_mode: "Markdown" });
+    bot.sendMessage(msg.chat.id, renderAvailabilityTable(), {
+      parse_mode: "HTML"
+    });
   }
 
   // ===== HELP =====
-  if (data === "help") bot.sendMessage(msg.chat.id, `Hello! Thanks for "Clicking Me"\nContact admin: @kiaramauir`);
-
-  // ===== ADMIN APPROVE / REJECT =====
-  if (data.startsWith("approve_") || data.startsWith("reject_")) {
-    if (userId !== process.env.ADMIN_ID) return;
-
-    const target = data.split("_")[1];
-    if (data.startsWith("approve_")) {
-      const amount = 50;
-      balances[target] = (balances[target] || 0) + amount;
-      bot.sendMessage(target, `✅ Top-Up Approved!\n💰 +₱${amount}`);
-      bot.answerCallbackQuery(query.id, { text: "Approved" });
-    } else {
-      bot.sendMessage(target, "❌ Top-Up Rejected.");
-      bot.answerCallbackQuery(query.id, { text: "Rejected" });
-    }
-  }
+  if (data === "help")
+    bot.sendMessage(msg.chat.id, `❓ <b>Help</b>\n\nContact admin: @kiaramauir`, { parse_mode: "HTML" });
 
   bot.answerCallbackQuery(query.id);
 });
 
-// ===== RECEIVE SCREENSHOT =====
+// ===== PHOTO (TOPUP PROOF) =====
 bot.on("photo", (msg) => {
   const userId = msg.from.id.toString();
   const photo = msg.photo[msg.photo.length - 1].file_id;
@@ -196,7 +206,7 @@ bot.on("photo", (msg) => {
   });
 });
 
-// ===== ADMIN UPDATE AVAILABILITY =====
+// ===== ADMIN UPDATE =====
 bot.onText(/\/update_avail (.+) (\d+)/, (msg, match) => {
   const userId = msg.from.id.toString();
   if (userId !== process.env.ADMIN_ID) return;
@@ -205,5 +215,5 @@ bot.onText(/\/update_avail (.+) (\d+)/, (msg, match) => {
   const qty = parseInt(match[2]);
   availability[service] = qty;
 
-  bot.sendMessage(msg.chat.id, `✅ Updated ${service} quantity to ${qty}`);
+  bot.sendMessage(msg.chat.id, `✅ Updated ${service} → ${qty}`);
 });
